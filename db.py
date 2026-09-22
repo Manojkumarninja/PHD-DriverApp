@@ -103,7 +103,8 @@ def create_trip(trip: dict, order_rows: list[dict]) -> int:
     """Write one row per delivered order to PHD_TripDetails_Out.
 
     `trip` needs: driver_name, driver_contact, driver_type, vehicle_type,
-    trip_start_time, trip_end_time, trip_distance, trip_cost.
+    trip_start_time, trip_end_time, trip_distance, trip_cost, dispatch_mdc,
+    remark (the last two may be None).
     `order_rows` items need: sale_order_id, delivery_date, city_id, city,
     customer_id, customer, sale_type.
 
@@ -128,11 +129,13 @@ def create_trip(trip: dict, order_rows: list[dict]) -> int:
             INSERT INTO {OUT_TABLE} (
                 DeliveryDate, CityId, City, SaleOrderId, CustomerId, Customer, SaleType_Text,
                 DriverName, DriverContactNumber, DriverType, VehicleType,
-                TripStartTime, TripEndTime, TripDistance, TripCost
+                TripStartTime, TripEndTime, TripDistance, TripCost,
+                DispatchMDC, Remark
             ) VALUES (
                 :delivery_date, :city_id, :city, :sale_order_id, :customer_id, :customer, :sale_type,
                 :driver_name, :driver_contact, :driver_type, :vehicle_type,
-                :trip_start_time, :trip_end_time, :trip_distance, :trip_cost
+                :trip_start_time, :trip_end_time, :trip_distance, :trip_cost,
+                :dispatch_mdc, :remark
             )
             """
         )
@@ -154,6 +157,7 @@ def get_trips(delivery_date: str | None = None, city: str | None = None) -> pd.D
     query = f"""
         SELECT DeliveryDate, City, DriverName, DriverContactNumber, DriverType, VehicleType,
                TripStartTime, TripEndTime, TripDistance, TripCost,
+               MAX(DispatchMDC) AS DispatchMDC, MAX(Remark) AS Remark,
                COUNT(*) AS num_customers,
                GROUP_CONCAT(SaleOrderId ORDER BY SaleOrderId) AS sale_order_ids
         FROM {OUT_TABLE}
@@ -222,6 +226,19 @@ def get_driver_history() -> pd.DataFrame:
     with get_engine().connect() as conn:
         df = pd.read_sql(text(query), conn)
     return df
+
+
+def get_mdc_history() -> list[str]:
+    """Dispatch MDC names already used, most frequent first."""
+    query = f"""
+        SELECT DispatchMDC FROM {OUT_TABLE}
+        WHERE DispatchMDC IS NOT NULL AND DispatchMDC <> ''
+        GROUP BY DispatchMDC
+        ORDER BY COUNT(*) DESC, DispatchMDC
+    """
+    with get_engine().connect() as conn:
+        rows = conn.execute(text(query)).fetchall()
+    return [str(r[0]) for r in rows]
 
 
 def delete_trip(sale_order_ids: list[int]) -> None:

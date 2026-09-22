@@ -5,3 +5,9 @@ __pycache__/
 streamlit_run.log
 *.log
 15thSep Data.csv
+
+# Node / web app
+node_modules/
+dist/
+.env
+*.xlsx

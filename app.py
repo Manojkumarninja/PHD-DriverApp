@@ -341,6 +341,27 @@ with tab_entry:
             key=f"trip_cost_{epoch}",
         )
 
+    mdc_history = db.get_mdc_history()
+    NEW_MDC_OPTION = "➕  Enter new MDC"
+    mc1, mc2 = st.columns(2)
+    with mc1:
+        mdc_choice = st.selectbox(
+            "Dispatch MDC (pick a previously used MDC, or add a new one)",
+            [NEW_MDC_OPTION] + mdc_history,
+            key=f"mdc_choice_{epoch}",
+        )
+    with mc2:
+        dispatch_mdc = st.text_input(
+            "Dispatch MDC",
+            value="" if mdc_choice == NEW_MDC_OPTION else mdc_choice,
+            placeholder="e.g. Bengaluru MDC",
+            key=f"dispatch_mdc_{epoch}_{mdc_choice}",
+        )
+    remark = st.text_area(
+        "Remark", placeholder="Optional note about this trip", max_chars=1000,
+        key=f"remark_{epoch}",
+    )
+
     st.markdown("</div>", unsafe_allow_html=True)
 
     submit = st.button("✅  Save Trip", type="primary")
@@ -384,6 +405,8 @@ with tab_entry:
                 "trip_end_time": trip_end.strftime("%H:%M"),
                 "trip_distance": float(trip_distance),
                 "trip_cost": float(trip_cost),
+                "dispatch_mdc": dispatch_mdc.strip() or None,
+                "remark": remark.strip() or None,
             }
             try:
                 n_saved = db.create_trip(trip, order_rows)
@@ -465,6 +488,9 @@ with tab_log:
                 f"{row.TripDistance:g} km · ₹{row.TripCost:,.2f}"
             )
             with st.expander(label):
+                mdc = row.DispatchMDC if isinstance(row.DispatchMDC, str) and row.DispatchMDC else "—"
+                note = row.Remark if isinstance(row.Remark, str) and row.Remark else "—"
+                st.caption(f"**Dispatch MDC:** {mdc}  ·  **Remark:** {note}")
                 orders = db.get_orders_by_ids(so_ids)
                 display = orders[["SaleOrderId", "Customer", "CustomerId", "SaleType_Text"]].rename(
                     columns={
