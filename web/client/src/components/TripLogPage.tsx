@@ -15,7 +15,14 @@ import {
 import { api } from "../lib/api";
 import type { Order, Trip, TripOrder } from "../lib/types";
 import { useAsync } from "../lib/hooks";
-import { cityLabel, currency, durationLabel, durationMinutes, number } from "../lib/format";
+import {
+  cityLabel,
+  currency,
+  durationLabel,
+  durationMinutes,
+  isAdhocSaleOrderId,
+  number,
+} from "../lib/format";
 import { EmptyState, ProgressBar, Spinner, StatCard } from "./ui";
 import { useToast } from "./Toast";
 
@@ -179,10 +186,14 @@ function TripRow({
                   <tr key={order.saleOrderId} className="border-t border-slate-200/70">
                     <td className="py-1.5 font-medium text-slate-800">{order.customer}</td>
                     <td className="py-1.5 font-mono text-xs tabular-nums text-slate-600">
-                      {order.saleOrderId}
+                      {isAdhocSaleOrderId(order.saleOrderId) ? (
+                        <span className="pill bg-amber-50 font-sans text-amber-800">Ad hoc</span>
+                      ) : (
+                        order.saleOrderId
+                      )}
                     </td>
                     <td className="py-1.5 font-mono text-xs tabular-nums text-slate-600">
-                      {order.customerId}
+                      {order.customerId ?? "—"}
                     </td>
                     <td className="py-1.5 text-slate-600">{order.saleType ?? "—"}</td>
                     <td className="py-1.5 text-right tabular-nums text-slate-700">

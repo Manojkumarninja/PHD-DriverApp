@@ -37,16 +37,32 @@ const createTripSchema = z.object({
     .max(1000, "Remark must be 1000 characters or fewer")
     .nullish()
     .transform((value) => value || null),
-  orders: z
-    .array(
-      z.object({
-        saleOrderId: z.number().int(),
-        customerId: z.number().int(),
-        customer: z.string(),
-        saleType: z.string().nullable(),
-      }),
-    )
-    .min(1, "Select at least one customer this driver delivered to"),
+  orders: z.array(
+    z.object({
+      saleOrderId: z.number().int().positive(),
+      customerId: z.number().int(),
+      customer: z.string(),
+      saleType: z.string().nullable(),
+    }),
+  ),
+  // Names typed in by hand for ad hoc orders; blank and repeated names dropped.
+  adhocCustomers: z
+    .array(z.string().trim().max(400, "Ad hoc customer name must be 400 characters or fewer"))
+    .default([])
+    .transform((names) => {
+      const seen = new Set<string>();
+      return names
+        .map((name) => name.split(" ").filter(Boolean).join(" "))
+        .filter((name) => {
+          const key = name.toLowerCase();
+          if (!name || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+    }),
+}).refine((trip) => trip.orders.length + trip.adhocCustomers.length > 0, {
+  message: "Select at least one customer, or add an ad hoc customer",
+  path: ["orders"],
 });
 
 const deleteTripSchema = z.object({

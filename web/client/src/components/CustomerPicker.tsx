@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
-import { Lock, PackageSearch, Search, Users } from "lucide-react";
+import { Lock, PackageSearch, Plus, Search, UserPlus, Users, X } from "lucide-react";
 import type { Order } from "../lib/types";
 import { useDebounced } from "../lib/hooks";
-import { number } from "../lib/format";
+import { normaliseName, number } from "../lib/format";
 import { EmptyState, Spinner } from "./ui";
 
 type Filter = "available" | "claimed" | "all";
@@ -13,14 +13,31 @@ export function CustomerPicker({
   selected,
   onToggle,
   onSelectMany,
+  adhocCustomers,
+  onAddAdhoc,
+  onRemoveAdhoc,
 }: {
   orders: Order[];
   loading: boolean;
   selected: Set<number>;
   onToggle: (saleOrderId: number) => void;
   onSelectMany: (saleOrderIds: number[], select: boolean) => void;
+  adhocCustomers: string[];
+  onAddAdhoc: (name: string) => void;
+  onRemoveAdhoc: (name: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [adhocDraft, setAdhocDraft] = useState("");
+  const draftName = normaliseName(adhocDraft);
+  const draftIsDuplicate = adhocCustomers.some(
+    (name) => name.toLowerCase() === draftName.toLowerCase(),
+  );
+
+  const addAdhoc = () => {
+    if (!draftName || draftIsDuplicate) return;
+    onAddAdhoc(draftName.slice(0, 400));
+    setAdhocDraft("");
+  };
   const [filter, setFilter] = useState<Filter>("available");
   const debouncedQuery = useDebounced(query, 150);
 
@@ -66,7 +83,9 @@ export function CustomerPicker({
             <Users className="h-4 w-4 text-brand-600" />
             Customers Delivered
           </p>
-          <span className="pill bg-brand-50 text-brand-700">{selected.size} selected</span>
+          <span className="pill bg-brand-50 text-brand-700">
+            {selected.size + adhocCustomers.length} selected
+          </span>
         </div>
 
         <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:justify-end">
@@ -97,6 +116,61 @@ export function CustomerPicker({
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Ad hoc customers: orders that aren't in today's list at all. */}
+      <div className="border-b border-slate-100 px-5 py-3">
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <UserPlus className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              className="input py-1.5 pl-9 text-sm"
+              placeholder="Customer not in the list? Type their name to add an ad hoc customer"
+              value={adhocDraft}
+              maxLength={400}
+              onChange={(event) => setAdhocDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addAdhoc();
+                }
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            className="btn-ghost px-3 py-1.5 text-xs"
+            onClick={addAdhoc}
+            disabled={!draftName || draftIsDuplicate}
+          >
+            <Plus className="h-3.5 w-3.5" /> Add
+          </button>
+        </div>
+        {draftIsDuplicate && (
+          <p className="mt-1 text-xs text-amber-700">Already added to this trip.</p>
+        )}
+        {adhocCustomers.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {adhocCustomers.map((name) => (
+              <span
+                key={name}
+                className="pill max-w-full bg-amber-50 text-amber-800 ring-1 ring-amber-200"
+                title="Ad hoc customer - saved without Sale Order ID, Customer ID or tonnage"
+              >
+                <span className="text-[10px] font-bold tracking-wide uppercase opacity-70">Ad hoc</span>
+                <span className="truncate">{name}</span>
+                <button
+                  type="button"
+                  onClick={() => onRemoveAdhoc(name)}
+                  className="-mr-1 cursor-pointer rounded-full p-0.5 hover:bg-amber-100"
+                  aria-label={`Remove ${name}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {selectableVisible.length > 0 && (
@@ -138,7 +212,7 @@ export function CustomerPicker({
             title={query ? "No customers match your search" : "Nothing to show here"}
             description={
               filter === "available" && counts.available === 0 && counts.all > 0
-                ? "Every customer for this date and city has already been claimed by a driver."
+                ? "Every listed customer for this date and city has already been claimed. You can still add ad hoc customers above."
                 : "Try a different date, city, or filter."
             }
           />

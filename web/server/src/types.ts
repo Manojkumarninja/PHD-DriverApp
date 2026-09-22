@@ -46,7 +46,7 @@ export interface Trip {
 export interface TripOrder {
   saleOrderId: number;
   customer: string;
-  customerId: number;
+  customerId: number | null;
   saleType: string | null;
   tonnage: number | null;
 }
@@ -65,6 +65,8 @@ export interface CreateTripInput {
   tripCost: number;
   dispatchMdc: string | null;
   remark: string | null;
+  /** Customer names typed in by hand for orders not in PHD_TripDetails. */
+  adhocCustomers: string[];
   orders: Array<{
     saleOrderId: number;
     customerId: number;

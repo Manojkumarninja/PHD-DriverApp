@@ -231,7 +231,7 @@ export async function getTripOrders(saleOrderIds: number[]): Promise<TripOrder[]
   return rows.map((row) => ({
     saleOrderId: toNumber(row.SaleOrderId),
     customer: String(row.Customer ?? ""),
-    customerId: toNumber(row.CustomerId),
+    customerId: row.CustomerId === null ? null : toNumber(row.CustomerId),
     saleType: toStringOrNull(row.SaleType_Text),
     tonnage: row.Tonnage === null ? null : toNumber(row.Tonnage),
   }));
@@ -242,39 +242,91 @@ export async function getTripOrders(saleOrderIds: number[]): Promise<TripOrder[]
  * orders was claimed since the client loaded them, nothing is written and
  * an AlreadyClaimedError names the conflicts.
  */
+/**
+ * Ad hoc customers (typed in by hand, not in PHD_TripDetails) are stored under
+ * negative placeholder SaleOrderIds: the column is the table's primary key and
+ * cannot be empty, and real sale orders are always positive.
+ */
+export const isAdhocSaleOrderId = (saleOrderId: number): boolean => saleOrderId < 0;
+
+/** Another save took the same placeholder ids first - retry with new ones. */
+class PlaceholderCollision extends Error {}
+
+const MYSQL_DUPLICATE_KEY = "ER_DUP_ENTRY";
+const MYSQL_DEADLOCK = "ER_LOCK_DEADLOCK";
+
+async function findClaimed(
+  connection: PoolConnection,
+  saleOrderIds: number[],
+): Promise<Array<{ saleOrderId: number; customer: string; driverName: string }>> {
+  // mysql2 would expand an empty array to the invalid SQL "IN ()".
+  if (saleOrderIds.length === 0) return [];
+  const [rows] = await connection.query<RowDataPacket[]>(
+    `SELECT o.SaleOrderId, o.Customer, o.DriverName
+       FROM ${OUT} o
+      WHERE o.SaleOrderId IN (?)`,
+    [saleOrderIds],
+  );
+  return rows.map((row) => ({
+    saleOrderId: toNumber(row.SaleOrderId),
+    customer: String(row.Customer ?? ""),
+    driverName: String(row.DriverName ?? ""),
+  }));
+}
+
+/**
+ * Write one row per delivered customer, inside a transaction. If any of the
+ * listed orders was claimed since the client loaded them, nothing is written
+ * and an AlreadyClaimedError names the conflicts. Ad hoc customers get fresh
+ * placeholder ids; if a concurrent save grabs the same ids, it retries.
+ */
 export async function createTrip(input: CreateTripInput): Promise<{ saved: number; saleOrderIds: number[] }> {
-  const saleOrderIds = input.orders.map((order) => order.saleOrderId);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await insertTrip(input);
+    } catch (error) {
+      if (error instanceof PlaceholderCollision) continue;
+      throw error;
+    }
+  }
+  throw new Error("Could not allocate ad hoc placeholder ids - please try saving again.");
+}
+
+async function insertTrip(input: CreateTripInput): Promise<{ saved: number; saleOrderIds: number[] }> {
+  const realIds = input.orders.map((order) => order.saleOrderId);
   const connection: PoolConnection = await pool.getConnection();
 
   try {
     await connection.beginTransaction();
 
-    const [claimed] = await connection.query<RowDataPacket[]>(
-      `SELECT o.SaleOrderId, o.Customer, o.DriverName
-         FROM ${OUT} o
-        WHERE o.SaleOrderId IN (?)`,
-      [saleOrderIds],
-    );
+    const claimed = await findClaimed(connection, realIds);
+    if (claimed.length > 0) throw new AlreadyClaimedError(claimed);
 
-    if (claimed.length > 0) {
-      await connection.rollback();
-      throw new AlreadyClaimedError(
-        claimed.map((row) => ({
-          saleOrderId: toNumber(row.SaleOrderId),
-          customer: String(row.Customer ?? ""),
-          driverName: String(row.DriverName ?? ""),
-        })),
+    const rows: Array<{
+      saleOrderId: number;
+      customerId: number | null;
+      customer: string;
+      saleType: string | null;
+    }> = input.orders.map((order) => ({ ...order }));
+
+    if (input.adhocCustomers.length > 0) {
+      const [lowestRows] = await connection.query<RowDataPacket[]>(
+        `SELECT MIN(SaleOrderId) AS lowest FROM ${OUT} WHERE SaleOrderId < 0`,
       );
+      const firstId = Math.min(toNumber(lowestRows[0]?.lowest), 0) - 1;
+      input.adhocCustomers.forEach((customer, offset) => {
+        rows.push({ saleOrderId: firstId - offset, customerId: null, customer, saleType: null });
+      });
     }
 
-    const values = input.orders.map((order) => [
+    const values = rows.map((row) => [
       input.deliveryDate,
       input.cityId,
       input.city,
-      order.saleOrderId,
-      order.customerId,
-      order.customer,
-      order.saleType,
+      row.saleOrderId,
+      row.customerId,
+      row.customer,
+      row.saleType,
       input.driverName,
       input.driverContact,
       input.driverType,
@@ -298,10 +350,22 @@ export async function createTrip(input: CreateTripInput): Promise<{ saved: numbe
     );
 
     await connection.commit();
-    return { saved: values.length, saleOrderIds };
+    return { saved: values.length, saleOrderIds: rows.map((row) => row.saleOrderId) };
   } catch (error) {
     // A rollback after a successful commit is a no-op, so this is safe.
     await connection.rollback().catch(() => undefined);
+
+    const code = (error as { code?: string }).code;
+    if (code === MYSQL_DUPLICATE_KEY) {
+      // Either a listed order was claimed a moment ago, or a concurrent save
+      // took the same placeholder ids. Tell the two apart.
+      const claimedNow = await findClaimed(connection, realIds);
+      if (claimedNow.length > 0) throw new AlreadyClaimedError(claimedNow);
+      throw new PlaceholderCollision();
+    }
+    if (code === MYSQL_DEADLOCK && input.adhocCustomers.length > 0) {
+      throw new PlaceholderCollision();
+    }
     throw error;
   } finally {
     connection.release();

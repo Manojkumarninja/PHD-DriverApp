@@ -17,6 +17,7 @@ import os
 import re
 from datetime import datetime
 
+import pandas as pd
 import streamlit as st
 
 import db
@@ -142,6 +143,18 @@ def fmt_date(d) -> str:
 
 PHONE_RE = re.compile(r"^[6-9]\d{9}$")
 NEW_DRIVER_OPTION = "➕  Enter new driver"
+
+
+def parse_adhoc_customers(raw: str) -> list[str]:
+    """One customer per line; blank lines and repeats (ignoring case) dropped."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in raw.splitlines():
+        name = " ".join(line.split())
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            names.append(name)
+    return names
 
 
 def fmt_hms(value) -> str:
@@ -291,7 +304,10 @@ with tab_entry:
 
     selected_so_ids: list[int] = []
     if avail_df.empty:
-        st.info("Every customer for this date & city has already been claimed by a driver trip.")
+        st.info(
+            "Every listed customer for this date & city has already been claimed by a "
+            "driver trip. You can still add ad hoc customers below."
+        )
     else:
         label_map = {}
         options = []
@@ -308,15 +324,36 @@ with tab_entry:
         )
         selected_so_ids = [label_map[l] for l in picked_labels]
 
-        if selected_so_ids:
-            sel_rows = avail_df[avail_df["SaleOrderId"].isin(selected_so_ids)]
-            preview = sel_rows[["SaleOrderId", "Customer", "CustomerId", "SaleType_Text", "Tonnage"]].rename(
-                columns={
-                    "SaleOrderId": "SO ID", "Customer": "Customer", "CustomerId": "Customer ID",
-                    "SaleType_Text": "Sale Type", "Tonnage": "Tonnage (T)",
-                }
-            )
-            st.dataframe(preview, hide_index=True, width="stretch")
+    adhoc_text = st.text_area(
+        "Ad hoc customers not in the list above (optional, one name per line)",
+        placeholder="e.g.\nSharma Caterers\nCafe Blue Tokai walk-in",
+        help="For ad hoc orders that aren't in today's order list. These are saved "
+             "with the trip's driver, cost and distance, but no Sale Order ID, "
+             "Customer ID or tonnage.",
+        key=f"adhoc_{epoch}_{sel_date}_{sel_city}",
+    )
+    adhoc_customers = parse_adhoc_customers(adhoc_text)
+
+    if selected_so_ids or adhoc_customers:
+        sel_rows = avail_df[avail_df["SaleOrderId"].isin(selected_so_ids)]
+        preview_rows = [
+            {
+                "SO ID": str(int(r.SaleOrderId)),
+                "Customer": r.Customer,
+                "Customer ID": str(int(r.CustomerId)),
+                "Sale Type": r.SaleType_Text,
+                "Tonnage (T)": f"{r.Tonnage:g}",
+            }
+            for r in sel_rows.itertuples()
+        ] + [
+            {"SO ID": "Ad hoc", "Customer": name, "Customer ID": "—", "Sale Type": "—", "Tonnage (T)": "—"}
+            for name in adhoc_customers
+        ]
+        st.caption(
+            f"{len(selected_so_ids)} listed + {len(adhoc_customers)} ad hoc = "
+            f"**{len(preview_rows)} customer(s)** in this trip"
+        )
+        st.dataframe(preview_rows, hide_index=True, width="stretch")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -384,8 +421,11 @@ with tab_entry:
         clean_contact = driver_contact.strip().replace(" ", "").replace("-", "")
         if not PHONE_RE.match(clean_contact):
             errors.append("Driver Contact Number must be a valid 10-digit mobile number.")
-        if not selected_so_ids:
-            errors.append("Select at least one customer this driver delivered to.")
+        if not selected_so_ids and not adhoc_customers:
+            errors.append("Select at least one customer, or type an ad hoc customer name.")
+        too_long = [name for name in adhoc_customers if len(name) > 400]
+        if too_long:
+            errors.append(f"Ad hoc customer name is too long (max 400 characters): {too_long[0][:40]}…")
         if trip_end <= trip_start:
             errors.append("Trip End Time must be after Trip Start Time.")
         if trip_distance <= 0:
@@ -407,7 +447,7 @@ with tab_entry:
             trip = {
                 "delivery_date": str(sel_date),
                 "city": sel_city,
-                "city_id": int(sel_rows.iloc[0]["CityId"]),
+                "city_id": int(city_df.iloc[0]["CityId"]),
                 "driver_name": driver_name.strip(),
                 "driver_contact": int(clean_contact),
                 "driver_type": driver_type,
@@ -420,7 +460,7 @@ with tab_entry:
                 "remark": remark.strip() or None,
             }
             try:
-                n_saved = db.create_trip(trip, order_rows)
+                n_saved = db.create_trip(trip, order_rows, adhoc_customers)
             except db.AlreadyClaimedError as exc:
                 taken_names = city_df[city_df["SaleOrderId"].isin(exc.taken_ids)]["Customer"].tolist()
                 st.error(
@@ -503,12 +543,15 @@ with tab_log:
                 note = row.Remark if isinstance(row.Remark, str) and row.Remark else "—"
                 st.caption(f"**Dispatch MDC:** {mdc}  ·  **Remark:** {note}")
                 orders = db.get_orders_by_ids(so_ids)
-                display = orders[["SaleOrderId", "Customer", "CustomerId", "SaleType_Text"]].rename(
-                    columns={
-                        "SaleOrderId": "SO ID", "Customer": "Customer", "CustomerId": "Customer ID",
-                        "SaleType_Text": "Sale Type",
+                display = [
+                    {
+                        "SO ID": "Ad hoc" if db.is_adhoc_so_id(o.SaleOrderId) else str(int(o.SaleOrderId)),
+                        "Customer": o.Customer,
+                        "Customer ID": "—" if pd.isna(o.CustomerId) else str(int(o.CustomerId)),
+                        "Sale Type": o.SaleType_Text if isinstance(o.SaleType_Text, str) else "—",
                     }
-                )
+                    for o in orders.itertuples()
+                ]
                 st.dataframe(display, hide_index=True, width="stretch")
                 if st.button("🗑️ Delete this trip (frees its customers)", key=f"del_trip_{i}_{so_ids[0]}"):
                     db.delete_trip(so_ids)

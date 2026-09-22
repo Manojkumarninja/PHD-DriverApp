@@ -63,3 +63,16 @@ export function nowHm(): string {
 }
 
 export const PHONE_RE = /^[6-9]\d{9}$/;
+
+/**
+ * Ad hoc customers (typed in by hand, not in the order list) are stored under
+ * negative placeholder Sale Order IDs; real sale orders are always positive.
+ */
+export function isAdhocSaleOrderId(saleOrderId: number): boolean {
+  return saleOrderId < 0;
+}
+
+/** Collapse runs of whitespace so "  Cafe   X " and "cafe x" count as one name. */
+export function normaliseName(raw: string): string {
+  return raw.split(/\s+/).filter(Boolean).join(" ");
+}

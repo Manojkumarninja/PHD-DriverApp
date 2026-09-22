@@ -43,7 +43,7 @@ export function validateTrip(form: TripFormState, selectedCount: number): TripFo
     errors.tripDistance = "Enter the distance travelled";
   }
   if (selectedCount === 0) {
-    errors.orders = "Select at least one customer this driver delivered to";
+    errors.orders = "Select at least one customer, or add an ad hoc customer";
   }
 
   return errors;
@@ -58,6 +58,7 @@ export function TripForm({
   errors,
   showErrors,
   selectedOrders,
+  adhocCount,
   saving,
   onSave,
 }: {
@@ -69,6 +70,7 @@ export function TripForm({
   errors: TripFormErrors;
   showErrors: boolean;
   selectedOrders: Order[];
+  adhocCount: number;
   saving: boolean;
   onSave: () => void;
 }) {
@@ -78,6 +80,7 @@ export function TripForm({
   const shown = (key: keyof TripFormErrors) => (showErrors ? errors[key] : undefined);
 
   const minutes = durationMinutes(form.tripStartTime, form.tripEndTime);
+  const customerCount = selectedOrders.length + adhocCount;
   const totalTonnage = selectedOrders.reduce((sum, order) => sum + (order.tonnage ?? 0), 0);
   const distance = Number(form.tripDistance) || 0;
   const cost = Number(form.tripCost) || 0;
@@ -246,9 +249,10 @@ export function TripForm({
         <div className="grid grid-cols-2 gap-2">
           <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
             <p className="text-xs font-medium text-slate-500">Customers</p>
-            <p className="text-lg font-bold tabular-nums text-slate-900">
-              {selectedOrders.length}
-            </p>
+            <p className="text-lg font-bold tabular-nums text-slate-900">{customerCount}</p>
+            {adhocCount > 0 && (
+              <p className="text-[11px] text-amber-700">incl. {adhocCount} ad hoc</p>
+            )}
           </div>
           <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
             <p className="flex items-center gap-1 text-xs font-medium text-slate-500">
@@ -278,8 +282,8 @@ export function TripForm({
           )}
         </button>
         <p className="text-center text-xs text-slate-500">
-          Writes {selectedOrders.length || "…"} row
-          {selectedOrders.length === 1 ? "" : "s"} to PHD_TripDetails_Out
+          Writes {customerCount || "…"} row
+          {customerCount === 1 ? "" : "s"} to PHD_TripDetails_Out
         </p>
       </div>
     </div>

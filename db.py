@@ -22,7 +22,7 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 DRIVER_TYPES = ["Regular Driver", "Porter Driver"]
 VEHICLE_TYPES = ["2 Wheeler", "3 Wheeler", "EV", "4 Wheeler"]
@@ -99,55 +99,112 @@ def get_claimed_so_ids() -> set[int]:
     return {int(r[0]) for r in rows}
 
 
-def create_trip(trip: dict, order_rows: list[dict]) -> int:
-    """Write one row per delivered order to PHD_TripDetails_Out.
+def is_adhoc_so_id(sale_order_id) -> bool:
+    """Ad hoc customers (not in PHD_TripDetails) are stored under negative
+    placeholder SaleOrderIds, since the column is the table's primary key and
+    cannot be empty. Real sale orders are always positive."""
+    try:
+        return int(sale_order_id) < 0
+    except (TypeError, ValueError):
+        return False
 
-    `trip` needs: driver_name, driver_contact, driver_type, vehicle_type,
-    trip_start_time, trip_end_time, trip_distance, trip_cost, dispatch_mdc,
-    remark (the last two may be None).
-    `order_rows` items need: sale_order_id, delivery_date, city_id, city,
-    customer_id, customer, sale_type.
+
+class _PlaceholderCollision(Exception):
+    """Another save took the same placeholder id first - retry with new ones."""
+
+
+def create_trip(trip: dict, order_rows: list[dict], adhoc_customers: list[str] | None = None) -> int:
+    """Write one row per delivered customer to PHD_TripDetails_Out.
+
+    `trip` needs: delivery_date, city, city_id, driver_name, driver_contact,
+    driver_type, vehicle_type, trip_start_time, trip_end_time, trip_distance,
+    trip_cost, dispatch_mdc, remark (the last two may be None).
+    `order_rows` items need: sale_order_id, customer_id, customer, sale_type.
+    `adhoc_customers` are names typed in by hand for orders not in
+    PHD_TripDetails; each gets a fresh negative placeholder SaleOrderId and
+    blank CustomerId/SaleType_Text.
 
     Raises AlreadyClaimedError (leaving the table untouched) if another
-    driver's trip claimed one of these orders in the meantime.
+    driver's trip claimed one of the real orders in the meantime.
     """
+    adhoc_customers = adhoc_customers or []
+    for _attempt in range(5):
+        try:
+            return _insert_trip(trip, order_rows, adhoc_customers)
+        except _PlaceholderCollision:
+            continue
+    raise RuntimeError("Could not allocate ad hoc placeholder ids - please try saving again.")
+
+
+def _insert_trip(trip: dict, order_rows: list[dict], adhoc_customers: list[str]) -> int:
     engine = get_engine()
     so_ids = [int(r["sale_order_id"]) for r in order_rows]
 
-    with engine.begin() as conn:
+    def claimed(conn) -> set[int]:
+        if not so_ids:
+            return set()
         placeholders = ", ".join(f":id{i}" for i in range(len(so_ids)))
         params = {f"id{i}": sid for i, sid in enumerate(so_ids)}
-        existing = conn.execute(
+        rows = conn.execute(
             text(f"SELECT SaleOrderId FROM {OUT_TABLE} WHERE SaleOrderId IN ({placeholders})"),
             params,
         ).fetchall()
-        if existing:
-            raise AlreadyClaimedError({int(r[0]) for r in existing})
+        return {int(r[0]) for r in rows}
 
-        insert_stmt = text(
-            f"""
-            INSERT INTO {OUT_TABLE} (
-                DeliveryDate, CityId, City, SaleOrderId, CustomerId, Customer, SaleType_Text,
-                DriverName, DriverContactNumber, DriverType, VehicleType,
-                TripStartTime, TripEndTime, TripDistance, TripCost,
-                DispatchMDC, Remark
-            ) VALUES (
-                :delivery_date, :city_id, :city, :sale_order_id, :customer_id, :customer, :sale_type,
-                :driver_name, :driver_contact, :driver_type, :vehicle_type,
-                :trip_start_time, :trip_end_time, :trip_distance, :trip_cost,
-                :dispatch_mdc, :remark
-            )
-            """
+    insert_stmt = text(
+        f"""
+        INSERT INTO {OUT_TABLE} (
+            DeliveryDate, CityId, City, SaleOrderId, CustomerId, Customer, SaleType_Text,
+            DriverName, DriverContactNumber, DriverType, VehicleType,
+            TripStartTime, TripEndTime, TripDistance, TripCost,
+            DispatchMDC, Remark
+        ) VALUES (
+            :delivery_date, :city_id, :city, :sale_order_id, :customer_id, :customer, :sale_type,
+            :driver_name, :driver_contact, :driver_type, :vehicle_type,
+            :trip_start_time, :trip_end_time, :trip_distance, :trip_cost,
+            :dispatch_mdc, :remark
         )
-        try:
-            for row in order_rows:
-                conn.execute(insert_stmt, {**trip, **row})
-        except IntegrityError as exc:
-            # Extremely tight race: someone claimed it between our check above
-            # and this insert. Surface as the same conflict error.
-            raise AlreadyClaimedError(set(so_ids)) from exc
+        """
+    )
 
-    return len(order_rows)
+    try:
+        with engine.begin() as conn:
+            taken = claimed(conn)
+            if taken:
+                raise AlreadyClaimedError(taken)
+
+            rows = list(order_rows)
+            if adhoc_customers:
+                lowest = conn.execute(
+                    text(f"SELECT MIN(SaleOrderId) FROM {OUT_TABLE} WHERE SaleOrderId < 0")
+                ).scalar()
+                next_id = min(int(lowest or 0), 0) - 1
+                for offset, name in enumerate(adhoc_customers):
+                    rows.append({
+                        "sale_order_id": next_id - offset,
+                        "customer_id": None,
+                        "customer": name,
+                        "sale_type": None,
+                    })
+
+            for row in rows:
+                conn.execute(insert_stmt, {**trip, **row})
+            return len(rows)
+    except IntegrityError as exc:
+        # A duplicate key means either a real order was claimed a moment ago,
+        # or a concurrent save grabbed the same placeholder ids. Tell them apart.
+        with engine.connect() as conn:
+            taken = claimed(conn)
+        if taken:
+            raise AlreadyClaimedError(taken) from exc
+        raise _PlaceholderCollision() from exc
+    except OperationalError as exc:
+        # InnoDB can resolve two simultaneous placeholder allocations as a
+        # deadlock (MySQL error 1213); that is just another retryable collision.
+        code = exc.orig.args[0] if exc.orig is not None and exc.orig.args else None
+        if code == 1213 and adhoc_customers:
+            raise _PlaceholderCollision() from exc
+        raise
 
 
 def get_trips(delivery_date: str | None = None, city: str | None = None) -> pd.DataFrame:

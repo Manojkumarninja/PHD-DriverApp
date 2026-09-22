@@ -42,6 +42,7 @@ export function NewTripPage({
 }) {
   const toast = useToast();
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [adhocCustomers, setAdhocCustomers] = useState<string[]>([]);
   const [form, setForm] = useState<TripFormState>(() => blankForm(meta));
   const [showErrors, setShowErrors] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -56,6 +57,7 @@ export function NewTripPage({
   if (lastContext !== contextKey) {
     setLastContext(contextKey);
     setSelected(new Set());
+    setAdhocCustomers([]);
     setShowErrors(false);
   }
 
@@ -84,7 +86,7 @@ export function NewTripPage({
     [orders, selected],
   );
 
-  const errors = validateTrip(form, selectedOrders.length);
+  const errors = validateTrip(form, selectedOrders.length + adhocCustomers.length);
   const claimedCount = orders.filter((order) => order.claimed).length;
   const availableCount = orders.length - claimedCount;
 
@@ -121,6 +123,7 @@ export function NewTripPage({
         tripCost: Number(form.tripCost) || 0,
         dispatchMdc: form.dispatchMdc.trim() || null,
         remark: form.remark.trim() || null,
+        adhocCustomers,
         orders: selectedOrders.map((order) => ({
           saleOrderId: order.saleOrderId,
           customerId: order.customerId,
@@ -136,6 +139,7 @@ export function NewTripPage({
       });
 
       setSelected(new Set());
+      setAdhocCustomers([]);
       setForm(blankForm(meta));
       setShowErrors(false);
       ordersState.refresh();
@@ -176,7 +180,7 @@ export function NewTripPage({
         <StatCard label="Claimed" value={claimedCount} icon={Lock} sublabel="By other trips" />
         <StatCard
           label="In this trip"
-          value={selectedOrders.length}
+          value={selectedOrders.length + adhocCustomers.length}
           tone="brand"
           icon={CheckCircle2}
           sublabel="Ready to save"
@@ -197,6 +201,11 @@ export function NewTripPage({
             selected={selected}
             onToggle={toggle}
             onSelectMany={selectMany}
+            adhocCustomers={adhocCustomers}
+            onAddAdhoc={(name) => setAdhocCustomers((current) => [...current, name])}
+            onRemoveAdhoc={(name) =>
+              setAdhocCustomers((current) => current.filter((existing) => existing !== name))
+            }
           />
         </div>
 
@@ -210,6 +219,7 @@ export function NewTripPage({
             errors={errors}
             showErrors={showErrors}
             selectedOrders={selectedOrders}
+            adhocCount={adhocCustomers.length}
             saving={saving}
             onSave={save}
           />
