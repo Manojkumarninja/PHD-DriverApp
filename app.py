@@ -12,12 +12,23 @@ one record, viewable/removable from the "Trip Log" tab.
 
 from __future__ import annotations
 
+import importlib
+import os
 import re
 from datetime import datetime
 
 import streamlit as st
 
 import db
+
+# Streamlit re-runs this script when a new commit is pulled, but keeps modules
+# it already imported in memory - so an updated db.py can go unseen and the
+# new app.py ends up calling functions the stale db module lacks. Reload db
+# whenever its file on disk differs from the copy that was loaded.
+_db_mtime = os.path.getmtime(db.__file__)
+if getattr(db, "_loaded_mtime", None) != _db_mtime:
+    db = importlib.reload(db)
+    db._loaded_mtime = _db_mtime
 
 # ==========================================================================
 # Page setup & styling
