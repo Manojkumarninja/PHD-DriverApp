@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-brand-50: #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #bfdbfe;
+  --color-brand-300: #93c5fd;
+  --color-brand-400: #60a5fa;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+  --color-brand-800: #1e40af;
+  --color-brand-900: #1e3a8a;
+  --color-brand-950: #172554;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    @apply bg-slate-100 font-sans text-slate-900 antialiased;
+    margin: 0;
+  }
+
+  /* Keyboard focus is visible everywhere, mouse clicks stay clean. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand-500;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+  }
+
+  .card-header {
+    @apply flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4;
+  }
+
+  .card-title {
+    @apply flex items-center gap-2 text-sm font-semibold text-slate-900;
+  }
+
+  .label {
+    @apply mb-1.5 block text-xs font-semibold tracking-wide text-slate-600 uppercase;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900
+           transition-colors placeholder:text-slate-400
+           focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none
+           disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400;
+  }
+
+  .input-error {
+    @apply border-rose-400 focus:border-rose-500 focus:ring-rose-500/20;
+  }
+
+  /* Tailwind v4 only lets @apply pull in real utilities, so each button
+     variant spells out the shared base rather than @apply-ing `.btn`. */
+  .btn,
+  .btn-primary,
+  .btn-ghost,
+  .btn-danger {
+    @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg px-4 py-2
+           text-sm font-semibold transition-all select-none
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply bg-brand-600 text-white shadow-sm hover:bg-brand-700 active:bg-brand-800;
+  }
+
+  .btn-ghost {
+    @apply border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+  }
+
+  .btn-danger {
+    @apply border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100;
+  }
+
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold;
+  }
+}
+
+/* Slim scrollbars inside the scrollable panes. */
+.scroll-slim::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scroll-slim::-webkit-scrollbar-thumb {
+  @apply rounded-full border-2 border-white bg-slate-300;
+}
+.scroll-slim::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-400;
+}
